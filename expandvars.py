@@ -152,39 +152,39 @@ def escape(vars_, nounset, environ, var_symbol):
     )
 
 
-def expand_var(vars_, nounset, environ, var_symbol):
-    """Expand a single variable."""
-
-    if len(vars_) == 0:
-        return var_symbol
-
-    if vars_[0] == ESCAPE_CHAR:
-        return var_symbol + escape(
-            vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
-        )
-
-    if vars_[0] == var_symbol:
-        return str(os.getpid()) + expand(
-            vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
-        )
-
-    if vars_[0] == "{":
-        return expand_modifier_var(
-            vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
-        )
-
-    buff = []
-    for c in vars_:
-        if _valid_char(c):
-            buff.append(c)
-        else:
-            n = len(buff)
-            return getenv(
-                "".join(buff), nounset=nounset, indirect=False, environ=environ
-            ) + expand(
-                vars_[n:], nounset=nounset, environ=environ, var_symbol=var_symbol
-            )
-    return getenv("".join(buff), nounset=nounset, indirect=False, environ=environ)
+# def expand_var(vars_, nounset, environ, var_symbol):
+#     """Expand a single variable."""
+#
+#     if len(vars_) == 0:
+#         return var_symbol
+#
+#     if vars_[0] == ESCAPE_CHAR:
+#         return var_symbol + escape(
+#             vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
+#         )
+#
+#     if vars_[0] == var_symbol:
+#         return str(os.getpid()) + expand(
+#             vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
+#         )
+#
+#     if vars_[0] == "{":
+#         return expand_modifier_var(
+#             vars_[1:], nounset=nounset, environ=environ, var_symbol=var_symbol
+#         )
+#
+#     buff = []
+#     for c in vars_:
+#         if _valid_char(c):
+#             buff.append(c)
+#         else:
+#             n = len(buff)
+#             return getenv(
+#                 "".join(buff), nounset=nounset, indirect=False, environ=environ
+#             ) + expand(
+#                 vars_[n:], nounset=nounset, environ=environ, var_symbol=var_symbol
+#             )
+#     return getenv("".join(buff), nounset=nounset, indirect=False, environ=environ)
 
 
 def expand_modifier_var(vars_, nounset, environ, var_symbol):
@@ -414,28 +414,33 @@ def expand(vars_, nounset=False, environ=os.environ, var_symbol="$"):
     """
     if isinstance(vars_, TextIOWrapper):
         # This is a file. Read it.
-        vars_ = vars_.read().strip()
+        vars_ = vars_.read()
 
     if len(vars_) == 0:
         return ""
 
     buff = []
+    is_escaping = False
 
+    vars_ = PeekableIterator(vars_)
     try:
         for c in vars_:
-            if c == var_symbol:
-                n = len(buff) + 1
-                return "".join(buff) + expand_var(
-                    vars_[n:], nounset=nounset, environ=environ, var_symbol=var_symbol
-                )
-
-            if c == ESCAPE_CHAR:
-                n = len(buff) + 1
-                return "".join(buff) + escape(
-                    vars_[n:], nounset=nounset, environ=environ, var_symbol=var_symbol
-                )
-
-            buff.append(c)
+            if is_escaping:
+                buff.append(c)
+                is_escaping = False
+            elif c == ESCAPE_CHAR:
+                if is_escaping:
+                    buff.append(c)
+                    is_escaping = False
+                else:
+                    is_escaping = True
+            elif c == var_symbol:
+                if vars_.peek() == PeekableIterator.NOTHING:
+                    buff.append(c)
+                else:
+                    buff.append(expand_var(vars_))
+            else:
+                buff.append(c)
         return "".join(buff)
     except MissingExcapedChar:
         raise MissingExcapedChar(vars_)
@@ -467,3 +472,70 @@ def expandvars(vars_, nounset=False):
             print(expandvars(f))
     """
     return expand(vars_, nounset=nounset)
+
+
+class State:
+    READING_VAR = 0
+    READING_MODIFIER_VAR = 1
+    READING_COLON_MODIFIER_VAR = 2
+    READING_SUBSTITUTION_MODIFIER_VAR = 3
+    READING_LEFT = 2
+    READING_RIGHT = 3
+
+
+def expand_var(buff):
+    name = []
+    state = State.READING_VAR
+    left = None
+    right = None
+    next_ = buff.peek()
+    while True:
+        next_ = buff.peek()
+        if next_ == PeekableIterator.NOTHING:
+            break
+        elif next_ == "{" and state == State.READING_VAR:
+            state = State.READING_MODIFIER_VAR
+            next(buff)
+        elif next_ == "}" and (
+            state == State.READING_MODIFIER_VAR
+            or state == State.READING_RIGHT
+            or state == State.READING_LEFT
+        ):
+            next(buff)
+            break
+        elif _valid_char(next_) and (
+            state == State.READING_VAR or state == State.READING_MODIFIER_VAR
+        ):
+            name.append(next(buff))
+        elif state == State.READING_VAR or state == State.READING_MODIFIER_VAR:
+            break
+        else:
+            raise BadSubstitution("".join(name))
+    return getenv("".join(name), nounset=False, indirect=False, environ=os.environ)
+
+
+class PeekableIterator:
+    """Peekable iterator."""
+
+    NOTHING = object()
+
+    def __init__(self, iterable):
+        self.iterator = iter(iterable)
+        self._next = self.NOTHING
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._next is self.NOTHING:
+            return next(self.iterator)
+        else:
+            next_ = self._next
+            self._next = self.NOTHING
+            return next_
+
+    def peek(self):
+        """Peek at the next item."""
+        if self._next is self.NOTHING:
+            self._next = next(self.iterator, self.NOTHING)
+        return self._next
