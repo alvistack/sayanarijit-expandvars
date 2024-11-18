@@ -1,0 +1,4 @@
+python3-expandvars: copyright-without-copyright-notice
+python3-expandvars: initial-upload-closes-no-bugs
+python3-expandvars: no-manual-page
+python3-expandvars: zero-byte-file-in-doc-directory
