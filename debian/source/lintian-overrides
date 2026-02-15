@@ -1,0 +1,5 @@
+python-expandvars source: file-without-copyright-information
+python-expandvars source: no-debian-changes
+python-expandvars source: source-contains-prebuilt-windows-binary
+python-expandvars source: source-is-missing
+python-expandvars source: source-package-encodes-python-version
